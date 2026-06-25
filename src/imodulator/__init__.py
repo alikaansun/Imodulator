@@ -8,6 +8,7 @@ from imodulator.RFSimulator import RFSimulatorFEMWELL
 from imodulator.OpticalSimulator import OpticalSimulatorMODE
 from imodulator.ElectroOpticalSimulator import ElectroOpticalSimulator
 from imodulator import Config
+from imodulator.ChargeSimulatorNN2D import ChargeSimulatorNN2D
 
 __all__ = [
     "Config",
@@ -18,5 +19,6 @@ __all__ = [
     "RFSimulatorFEMWELL",
     "OpticalSimulatorFEMWELL",
     "OpticalSimulatorMODE",
-    "ElectroOpticalSimulator"
+    "ElectroOpticalSimulator",
+    "ChargeSimulatorNN2D",
 ]
