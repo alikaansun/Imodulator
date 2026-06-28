@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import os
 import copy
+import json
+import inspect
 from collections import OrderedDict
+from configparser import ConfigParser
 
 import numpy as np
 import pandas as pd
@@ -28,39 +31,75 @@ from imodulator.PhotonicPolygon import (
     InsulatorPolygon,
 )
 
-####### SOLCORE imports ##########
-from solcore.material_system.material_system import BaseMaterial
-from solcore.material_data.mobility import (
-    calculate_InAlAs,
-    calculate_InGaAs,
-    calculate_InGaAsP,
-    calculate_InGaP,
-    calculate_AlGaAs,
-    mobility_low_field,
-)
-import json
-import inspect
-
-import solcore
-from solcore import config
-from solcore.parameter_system import ParameterSystem
-from solcore.poisson_drift_diffusion.DeviceStructure import DefaultProperties
-from configparser import ConfigParser
-
-from solcore.solar_cell import Junction, SolarCell, Layer
-from solcore.state import State
-from solcore.solar_cell_solver import solar_cell_solver
-
-import gmsh
-
 PhotonicPolygon = SemiconductorPolygon | MetalPolygon | InsulatorPolygon
 Line = LineString | MultiLineString | LinearRing
 
-# from imodulator.ElectroOpticalModel import InGaAsPElectroOpticalModel
-##Configured imports
-from imodulator.Config import config_instance
-# Get access to imported modules
-nn = config_instance.get_nextnanopy()
+# ---------------------------------------------------------------------------
+# solcore, gmsh and nextnanopy are optional on Windows (Fortran compiler
+# required for solcore; git required to install femwell).  We import them
+# here with a graceful fallback so that this module can at least be imported
+# for inspection; actual use of the simulators will raise a clear error.
+# ---------------------------------------------------------------------------
+_SOLCORE_AVAILABLE = False
+_SOLCORE_ERROR = ""
+try:
+    from solcore.material_system.material_system import BaseMaterial
+    from solcore.material_data.mobility import (
+        calculate_InAlAs,
+        calculate_InGaAs,
+        calculate_InGaAsP,
+        calculate_InGaP,
+        calculate_AlGaAs,
+        mobility_low_field,
+    )
+    import solcore
+    from solcore import config as solcore_config
+    from solcore.parameter_system import ParameterSystem
+    from solcore.poisson_drift_diffusion.DeviceStructure import DefaultProperties
+    from solcore.solar_cell import Junction, SolarCell, Layer
+    from solcore.state import State
+    from solcore.solar_cell_solver import solar_cell_solver
+    _SOLCORE_AVAILABLE = True
+except ImportError as _solcore_exc:
+    _SOLCORE_ERROR = (
+        "solcore is required for charge-transport simulations but could not be "
+        "imported.  On Windows you may need a Fortran compiler — install one "
+        "via conda (`conda install -c conda-forge gfortran`) before running "
+        "`pip install solcore`.  Original error: " + str(_solcore_exc)
+    )
+    # Provide a dummy base so that the class body below can be parsed.
+    BaseMaterial = object
+
+_GMSH_AVAILABLE = False
+_GMSH_ERROR = ""
+try:
+    import gmsh
+    _GMSH_AVAILABLE = True
+except ImportError as _gmsh_exc:
+    _GMSH_ERROR = "gmsh is required for mesh generation: pip install gmsh.  Original error: " + str(_gmsh_exc)
+
+# nextnanopy is loaded through Config to apply user settings.
+from imodulator.Config import config_instance as _config_instance
+_nn = _config_instance.get_nextnanopy()  # returns None if not installed
+
+
+def _check_solcore():
+    if not _SOLCORE_AVAILABLE:
+        raise ImportError(_SOLCORE_ERROR)
+
+
+def _check_gmsh():
+    if not _GMSH_AVAILABLE:
+        raise ImportError(_GMSH_ERROR)
+
+
+def _get_nn():
+    if _nn is None:
+        raise ImportError(
+            "nextnanopy is required for ChargeSimulatorNN.  "
+            "Install it with: pip install nextnanopy"
+        )
+    return _nn
 
 
 #References
@@ -121,15 +160,14 @@ class ChargeSimulatorNN:
 
     def __init__(
         self,
-        device: PhotonicDevice, 
+        device: PhotonicDevice,
         simulation_line: LineString,
-        inputfile_name: str ="quicksave", 
-        output_directory:str=nn.config.config['nextnano++']['outputdirectory'],
-        temperature: float = 300.0,  # Add temperature parameter
-        bias_start_stop_step: list = [0,1,1], #contact1 is the bias electrode decide - or + accordingly
-        # save_sim: bool = False,
+        inputfile_name: str = "quicksave",
+        output_directory: str | None = None,
+        temperature: float = 300.0,
+        bias_start_stop_step: list = [0, 1, 1],
     ):
-        
+
         """
         Initialize the ChargeSimulatorNN.
 
@@ -137,14 +175,20 @@ class ChargeSimulatorNN:
             device: PhotonicDevice instance containing the device geometry and materials.
             simulation_line: LineString defining the simulation line along which to perform 1D simulation.
             inputfile_name: Name for the nextnano input file. Defaults to "quicksave".
-            output_directory: Directory for simulation output. Defaults to config value.
+            output_directory: Directory for simulation output. Defaults to the value
+                configured in config.yaml (nextnano++ outputdirectory).
             temperature: Simulation temperature in Kelvin. Defaults to 300.0.
             bias_start_stop_step: Voltage sweep [start, stop, step]. Defaults to [0,1,1].
-            
+
         """
-             
+        nn = _get_nn()
+
+        if output_directory is None:
+            output_directory = nn.config.config['nextnano++']['outputdirectory']
+
+        self.nn = nn
         self.temperature = temperature
-        self.inputfile_name = inputfile_name 
+        self.inputfile_name = inputfile_name
         self.output_directory = output_directory
         self.photonicdevice = device
         self.bias_start_stop_step=bias_start_stop_step
@@ -242,8 +286,8 @@ class ChargeSimulatorNN:
             f.write(self.complete_content)
             
         print(f"Input file created: {output_path}")
-        self.NNinputf=nn.InputFile(output_path)
-        self.NNinputf.config=nn.config#makes sure you use the config
+        self.NNinputf = self.nn.InputFile(output_path)
+        self.NNinputf.config = self.nn.config
         
     def _create_global_section(self):
         """Create the global section of the nextnano input file"""
@@ -467,10 +511,10 @@ class ChargeSimulatorNN:
 
         All arrays have shape (n_bias_points, n_grid_points).
         """
-        if folderpath == None:
-            nndata=nn.DataFolder(self.NNinputf.folder_output)
+        if folderpath is None:
+            nndata = self.nn.DataFolder(self.NNinputf.folder_output)
         else:
-            nndata=nn.DataFolder(folderpath)
+            nndata = self.nn.DataFolder(folderpath)
         #file locations to be processed
         f_iv = [f for f in nndata.files if 'IV_characteristics.dat' in f][0]
         self.V= pd.read_csv(f_iv,delim_whitespace=True).iloc[:,0]
@@ -810,9 +854,10 @@ class ChargeSimulatorNN:
 class CustomMaterial_OBP(BaseMaterial):
 
     def __init__(self, name, opb_mat, T = 300, **kwargs):
+        _check_solcore()
         BaseMaterial.__init__(
             self,
-            T=300, 
+            T=300,
             material_string = name,
             **kwargs
         )
@@ -1305,15 +1350,17 @@ class ChargeSimulatorSolcore:
         bias_start_stop_step: list = [0,1,1], #contact1 is the bias electrode decide - or + accordingly
     ):
         """
-        Initialize the ChargeSimulatorNN.
+        Initialize the ChargeSimulatorSolcore.
 
         Args:
             device: PhotonicDevice instance containing the device geometry and materials.
             simulation_line: LineString defining the simulation line along which to perform 1D simulation.
             temperature: Simulation temperature in Kelvin. Defaults to 300.0.
             bias_start_stop_step: Voltage sweep [start, stop, steps]. Defaults to [0,1,1].
-            
+
         """
+        _check_solcore()
+        _check_gmsh()
         self.temperature = temperature
         self.photonicdevice = device
         self.bias_start_stop_step=bias_start_stop_step

@@ -29,8 +29,9 @@ classifiers = [
 license = {file = "LICENSE"}
 keywords = ["integrated photonics", "electro-optic modulators", "photonics simulation", "optical mode solver", "rf mode solver", "charge transport simulation", "electro-optic interaction"]
 dependencies = [
-    #"femwell==0.1.11",
-    # "femwell @ git+https://github.com/HelgeGehring/femwell.git@36e2ff1d8507e3839f29b5f14c298a091b463c49",
+    # femwell is installed by the custom build hook (hatch_build.py) from a
+    # specific git commit because no compatible PyPI release exists yet.
+    # Requires 'git' to be installed and in PATH — see INSTALL notes below.
     "matplotlib==3.9.0",
     "numpy>=2.0.0",
     "Pint>=0.24",
@@ -38,11 +39,31 @@ dependencies = [
     "shapely==2.0.4",
     "pyyaml==6.0.2",
     "pandas==2.3.0",
+    "scikit-fem>=11.0.0",
+    "gmsh>=4.11",
+    "meshio>=5.3",
+    "pygmsh>=7.1.17",
     "nextnanopy>=1.0.1",
     "openbandparams>=1.0",
+    "solcore>=5.10.1",
+]
+
+[project.optional-dependencies]
+# Install only the core optical/RF solvers without the charge-transport stack
+# (useful on Windows where solcore's Fortran extensions may not compile):
+#   pip install imodulator[core]
+core = [
+    "matplotlib==3.9.0",
+    "numpy>=2.0.0",
+    "Pint>=0.24",
+    "scipy==1.13.1",
+    "shapely==2.0.4",
+    "pyyaml==6.0.2",
+    "pandas==2.3.0",
     "scikit-fem>=11.0.0",
+    "gmsh>=4.11",
+    "meshio>=5.3",
     "pygmsh>=7.1.17",
-    "solcore>=5.10.1"
 ]
 
 [project.urls]
@@ -52,10 +73,10 @@ Repository = "https://github.com/duarte-jfs/Imodulator"
 
 
 [tool.hatch.build.targets.wheel]
-packages = ["imodulator"]          # <--- ensures Python package is installed
+packages = ["src/imodulator"]
 include = [
-    "imodulator/**/*.yaml",
-    "imodulator/**/*.yml"
+    "src/imodulator/**/*.yaml",
+    "src/imodulator/**/*.yml",
 ]
 
 [tool.hatch.build.targets.sdist]
